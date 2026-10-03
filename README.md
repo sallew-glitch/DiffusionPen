@@ -24,12 +24,13 @@
 - New `--sampling_steps` flag sets the number of denoising steps. The default is 50 for DDIM and 20 for DPM.
 - No retraining needed. Both schedulers use the same Stable Diffusion v1.5 noise schedule, so the original weights work as-is.
 
-<table>
-  <tr>
-    <td align="center"><img src="imgs/samples/paragraph_style_12_ddim50.png" width="420"><br>DDIM, 50 steps</td>
-    <td align="center"><img src="imgs/samples/paragraph_style_12_dpm20.png" width="420"><br>DPM-Solver++, 20 steps</td>
-  </tr>
-</table>
+<p align="center">
+  <img src="imgs/samples/ddim_vs_dpm_steps.png" alt="DDIM vs DPM-Solver++ at 1, 5, 10, 20 and 50 sampling steps" style="width: 80%;">
+</p>
+
+Both samplers were run with the same text, the same style (writer 12) and the same model weights, at different step counts:
+- **DPM-Solver++ at 20 steps looks almost the same as DDIM at 50 steps.**
+- **At very low step counts, DPM-Solver++ degrades much more gracefully.** With 1 step, DDIM produces pure noise while DPM-Solver++ already gives blurry but readable words. At 5–10 steps, DPM-Solver++ is already readable.
 
 **Command-line control over sampling.** Before, the text and style were hard-coded in `train.py`. Now you can set them with flags:
 - `--text`: the word(s) or paragraph to generate.
