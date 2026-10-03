@@ -1,0 +1,33 @@
+# Datasets (download separately, see README)
+iam_data/
+saved_iam_data/
+
+# Model weights (download from Hugging Face, see README)
+diffusionpen_iam_model_path/
+style_models/
+stable-diffusion-v1-5/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# Generated outputs
+image_samples/
+/paragraph_style_*.png
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Logging
+wandb/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

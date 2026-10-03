@@ -11,10 +11,15 @@ import copy
 import argparse
 import uuid
 import json
-from diffusers import AutoencoderKL, DDIMScheduler
+from diffusers import AutoencoderKL, DDIMScheduler, DPMSolverMultistepScheduler
 import random
+import string
+import time
 from unet import UNetModel
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None  # only needed with --wandb_log True
 from torchvision import transforms
 from feature_extractor import ImageEncoder
 from utils.iam_dataset import IAMDataset
@@ -98,6 +103,14 @@ def save_images(images, path, args, **kwargs):
         im = Image.fromarray(ndarr)
     im.save(path)
     return im
+
+def save_single_images(images, path, args, **kwargs):
+    #save each generated image separately (path gets an index suffix when there are several)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    root, ext = os.path.splitext(path)
+    for i, image in enumerate(images):
+        out_path = path if len(images) == 1 else f'{root}_{i}{ext}'
+        save_images(image.unsqueeze(0), out_path, args, **kwargs)
 
 def crop_whitespace_width(img):
     #tensor image to PIL
@@ -225,7 +238,7 @@ class Diffusion:
                     x = torch.randn((n, 3, self.img_size[0], self.img_size[1])).to(args.device)
                 
                 #scheduler
-                noise_scheduler.set_timesteps(50)
+                noise_scheduler.set_timesteps(args.sampling_steps)
                 for time in noise_scheduler.timesteps:
                     
                     t_item = time.item()
@@ -412,7 +425,7 @@ class Diffusion:
                 x = torch.randn((n, 3, self.img_size[0], self.img_size[1])).to(args.device)
             
             #scheduler
-            noise_scheduler.set_timesteps(50)
+            noise_scheduler.set_timesteps(args.sampling_steps)
             for time in noise_scheduler.timesteps:
                 
                 t_item = time.item()
@@ -563,7 +576,7 @@ def main():
     parser.add_argument('--num_heads', type=int, default=4)
     parser.add_argument('--num_res_blocks', type=int, default=1)
     parser.add_argument('--save_path', type=str, default='./diffusionpen_iam_model_path') 
-    parser.add_argument('--device', type=str, default='cuda:0')
+    parser.add_argument('--device', type=str, default='cuda:0' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--wandb_log', type=bool, default=False)
     parser.add_argument('--color', type=bool, default=True)
     parser.add_argument('--unet', type=str, default='unet_latent', help='unet_latent')
@@ -578,9 +591,17 @@ def main():
     parser.add_argument('--stable_dif_path', type=str, default='./stable-diffusion-v1-5')
     parser.add_argument('--train_mode', type=str, default='train', help='train, sampling')
     parser.add_argument('--sampling_mode', type=str, default='single_sampling', help='single_sampling (generate single image), paragraph (generate paragraph)')
-    
+    parser.add_argument('--scheduler', type=str, default='ddim', choices=['ddim', 'dpm'], help='ddim (DDIMScheduler) or dpm (DPMSolverMultistepScheduler, DPM-Solver++)')
+    parser.add_argument('--sampling_steps', type=int, default=None, help='denoising steps (default: 50 for ddim, 20 for dpm)')
+    parser.add_argument('--text', type=str, default=None, help='text to generate: space-separated words for single_sampling, the paragraph for paragraph mode')
+    parser.add_argument('--style', type=int, default=None, help='writer style index (default: random for single_sampling, 12 for paragraph)')
+    parser.add_argument('--seed', type=int, default=None, help='random seed for reproducible sampling')
+    parser.add_argument('--output_dir', type=str, default='./image_samples', help='outputs go to <output_dir>/single and <output_dir>/paragraph')
+
     args = parser.parse_args()
-    
+    if args.sampling_steps is None:
+        args.sampling_steps = 50 if args.scheduler == 'ddim' else 20
+
     print('torch version', torch.__version__)
     
     if args.wandb_log==True:
@@ -603,17 +624,19 @@ def main():
         iam_folder = './iam_data/words'
         myDataset = IAMDataset
         style_classes = 339
-        if args.level == 'word':
-            train_data = myDataset(iam_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
-        else:
-            train_data = myDataset(iam_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
-            test_data = myDataset(iam_folder, 'test', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
-        print('train data', len(train_data))
-        
-        test_size = args.batch_size
-        rest = len(train_data) - test_size
-        test_data, _ = random_split(train_data, [test_size, rest], generator=torch.Generator().manual_seed(42))
-        
+        #the dataset is only needed for training; sampling reads style images directly from iam_folder
+        if args.train_mode == 'train':
+            if args.level == 'word':
+                train_data = myDataset(iam_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
+            else:
+                train_data = myDataset(iam_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
+                test_data = myDataset(iam_folder, 'test', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=transform, args=args)
+            print('train data', len(train_data))
+
+            test_size = args.batch_size
+            rest = len(train_data) - test_size
+            test_data, _ = random_split(train_data, [test_size, rest], generator=torch.Generator().manual_seed(42))
+
     elif args.dataset == 'gnhk':
         print('loading GNHK')
         myDataset = GNHK_Dataset
@@ -623,14 +646,16 @@ def main():
                             transforms.ToTensor(),
                             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) #transforms.Normalize((0.5,), (0.5,)),  #
                             ])
-        train_data = myDataset(dataset_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=train_transform, args=args)
-        test_size = args.batch_size
-        rest = len(train_data) - test_size
-        test_data, _ = random_split(train_data, [test_size, rest], generator=torch.Generator().manual_seed(42))
-        
-    train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4)
+        if args.train_mode == 'train':
+            train_data = myDataset(dataset_folder, 'train', 'word', fixed_size=(1 * 64, 256), tokenizer=None, text_encoder=None, feat_extractor=None, transforms=train_transform, args=args)
+            test_size = args.batch_size
+            rest = len(train_data) - test_size
+            test_data, _ = random_split(train_data, [test_size, rest], generator=torch.Generator().manual_seed(42))
 
-    test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    if args.train_mode == 'train':
+        train_loader = DataLoader(train_data, batch_size=args.batch_size, shuffle=True, num_workers=4)
+
+        test_loader = DataLoader(test_data, batch_size=args.batch_size, shuffle=False, num_workers=4)
     character_classes = ['!', '"', '#', '&', "'", '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '?', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', ' ']
     
     ######################### MODEL #######################################
@@ -644,9 +669,12 @@ def main():
     if args.dataparallel==True:
         device_ids = [3,4]
         print('using dataparallel with device:', device_ids)
-    else:
-        idx = int(''.join(filter(str.isdigit, args.device)))
+    elif args.device.startswith('cuda'):
+        idx = int(''.join(filter(str.isdigit, args.device)) or 0)
         device_ids = [idx]
+    else:
+        #cpu: DataParallel just wraps the module (keeps the .module attribute the code relies on)
+        device_ids = None
     #unet = unet.to(args.device)
 
     if args.model_name == 'diffusionpen':
@@ -680,9 +708,9 @@ def main():
     #load from last checkpoint
     
     if args.load_check==True:
-        unet.load_state_dict(torch.load(f'{args.save_path}/models/ckpt.pt'))
-        optimizer.load_state_dict(torch.load(f'{args.save_path}/models/optim.pt'))
-        ema_model.load_state_dict(torch.load(f'{args.save_path}/models/ema_ckpt.pt'))
+        unet.load_state_dict(torch.load(f'{args.save_path}/models/ckpt.pt', map_location=args.device))
+        optimizer.load_state_dict(torch.load(f'{args.save_path}/models/optim.pt', map_location=args.device))
+        ema_model.load_state_dict(torch.load(f'{args.save_path}/models/ema_ckpt.pt', map_location=args.device))
         print('Loaded models and optimizer')
     
     if args.latent==True:
@@ -695,9 +723,13 @@ def main():
     else:
         vae = None
 
-    #add DDIM scheduler from huggingface
-    ddim = DDIMScheduler.from_pretrained(args.stable_dif_path, subfolder="scheduler")
-    
+    #add noise scheduler from huggingface (both share the SD v1.5 noise schedule config)
+    if args.scheduler == 'dpm':
+        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(args.stable_dif_path, subfolder="scheduler", algorithm_type="dpmsolver++", solver_order=2)
+    else:
+        noise_scheduler = DDIMScheduler.from_pretrained(args.stable_dif_path, subfolder="scheduler")
+    print(f'Scheduler: {args.scheduler} ({type(noise_scheduler).__name__}), {args.sampling_steps} sampling steps')
+
     #### STYLE ####
     feature_extractor = ImageEncoder(model_name='mobilenetv2_100', num_classes=0, pretrained=True, trainable=True)
     PATH = args.style_path 
@@ -713,7 +745,7 @@ def main():
     feature_extractor.eval()
     
     if args.train_mode == 'train':
-        train(diffusion, unet, ema, ema_model, vae, optimizer, mse_loss, train_loader, test_loader, style_classes, feature_extractor, vocab_size, ddim, transform, args, tokenizer=tokenizer, text_encoder=text_encoder, lr_scheduler=lr_scheduler)
+        train(diffusion, unet, ema, ema_model, vae, optimizer, mse_loss, train_loader, test_loader, style_classes, feature_extractor, vocab_size, noise_scheduler, transform, args, tokenizer=tokenizer, text_encoder=text_encoder, lr_scheduler=lr_scheduler)
     
     elif args.train_mode == 'sampling':
         
@@ -725,25 +757,35 @@ def main():
         
         ema = EMA(0.995)
         ema_model = copy.deepcopy(unet).eval().requires_grad_(False)
-        ema_model.load_state_dict(torch.load(f'{args.save_path}/models/ema_ckpt.pt'))
+        ema_model.load_state_dict(torch.load(f'{args.save_path}/models/ema_ckpt.pt', map_location=args.device))
         ema_model.eval()
-        
+
+        if args.seed is not None:
+            random.seed(args.seed)
+            np.random.seed(args.seed)
+            torch.manual_seed(args.seed)
+        sched_tag = f'{args.scheduler}{args.sampling_steps}'
+        start_time = time.time()
+
         if args.sampling_mode == 'single_sampling':
-            x_text = ['text', 'word']
+            out_dir = os.path.join(args.output_dir, 'single')
+            x_text = args.text.split() if args.text else ['text', 'word']
             for x_text in x_text:
                 print('Word:', x_text)
-                s = random.randint(0, 339) #index for style class
-                
+                s = args.style if args.style is not None else random.randint(0, style_classes - 1) #index for style class
+
                 print('style', s)
                 labels = torch.tensor([s]).long().to(args.device)
-                ema_sampled_images = diffusion.sampling(ema_model, vae, n=len(labels), x_text=x_text, labels=labels, args=args, style_extractor=feature_extractor, noise_scheduler=ddim, transform=transform, character_classes=None, tokenizer=tokenizer, text_encoder=text_encoder, run_idx=None)  
-                save_single_images(ema_sampled_images, os.path.join(f'./image_samples/', f'{x_text}_style_{s}.png'), args)
+                ema_sampled_images = diffusion.sampling(ema_model, vae, n=len(labels), x_text=x_text, labels=labels, args=args, style_extractor=feature_extractor, noise_scheduler=noise_scheduler, transform=transform, character_classes=None, tokenizer=tokenizer, text_encoder=text_encoder, run_idx=None)
+                save_single_images(ema_sampled_images, os.path.join(out_dir, f'{x_text}_style_{s}_{sched_tag}.png'), args)
+            print(f'Saved to {out_dir} in {time.time() - start_time:.1f}s')
 
-        
+
         elif args.sampling_mode == 'paragraph':
             print('Sampling paragraph')
+            out_dir = os.path.join(args.output_dir, 'paragraph')
             #make the code to generate lines
-            lines = 'In this work , we focus on style variation . We present a novel method to control the style of the text . Our method is able to mimic various writing styles .'
+            lines = args.text if args.text else 'In this work , we focus on style variation . We present a novel method to control the style of the text . Our method is able to mimic various writing styles .'
             fakes= []
             gap = np.ones((64, 16))
             max_line_width = 900
@@ -754,12 +796,12 @@ def main():
             #print('longest_word_length', longest_word_length)
             #s = random.randint(0, 339)#.long().to(args.device)
             #s = random.randint(0, 161)#.long().to(args.device)
-            s = 12 #25 #129 #201
+            s = args.style if args.style is not None else 12 #25 #129 #201
             for word in lines.strip().split(' '):
                 print('Word:', word)
                 print('Style:', s)
                 labels = torch.tensor([s]).long().to(args.device)
-                ema_sampled_images = diffusion.sampling(ema_model, vae, n=len(labels), x_text=word, labels=labels, args=args, style_extractor=feature_extractor, noise_scheduler=ddim, transform=transform, character_classes=None, tokenizer=tokenizer, text_encoder=text_encoder, clip_model=None, run_idx=None)  
+                ema_sampled_images = diffusion.sampling(ema_model, vae, n=len(labels), x_text=word, labels=labels, args=args, style_extractor=feature_extractor, noise_scheduler=noise_scheduler, transform=transform, character_classes=None, tokenizer=tokenizer, text_encoder=text_encoder, run_idx=None)
                 #print('ema_sampled_images', ema_sampled_images.shape)
                 image = ema_sampled_images.squeeze(0)
                 
@@ -807,7 +849,7 @@ def main():
                 print(f'Word {word} - scaled_img {scaled_img.size}')
                 # Padding
                 #if word is in punctuation:
-                if word in punctuation:
+                if word in string.punctuation:
                     #rescale to height 10
                     w_punc = scaled_img.width
                     h_punc = scaled_img.height
@@ -902,7 +944,10 @@ def main():
             paragraph_image = Image.fromarray(paragraph_img)
             paragraph_image = paragraph_image.convert("L")    
             
-            paragraph_image.save(f'paragraph_style_{s}.png')
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, f'paragraph_style_{s}_{sched_tag}.png')
+            paragraph_image.save(out_path)
+            print(f'Saved to {out_path} in {time.time() - start_time:.1f}s')
 
     
 if __name__ == "__main__":

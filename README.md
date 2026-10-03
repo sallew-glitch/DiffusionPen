@@ -1,4 +1,7 @@
- # 🔥 DiffusionPen: Towards Controlling the Style of Handwritten Text Generation
+# 🔥 DiffusionPen: Handwritten Text Generation (extended fork)
+
+> **This is a fork of [koninik/DiffusionPen](https://github.com/koninik/DiffusionPen)** by Konstantina Nikolaidou, George Retsinas, Giorgos Sfikas and Marcus Liwicki, the official code for the ECCV 2024 paper *DiffusionPen: Towards Controlling the Style of Handwritten Text Generation*.
+> All credit for the model, the training code and the pretrained weights goes to the original authors. This fork builds on their work with a faster sampler and an easier-to-use sampling interface. If you use this code, please [cite the original paper](#-citation).
 
  <p align='center'>
   <b>
@@ -9,16 +12,42 @@
     <a href="https://drive.google.com/file/d/1BXHPPpjD84mhdYUnnHeXCc-A-3tWhkaR/view?usp=share_link">Poster</a>
     |
     <a href="https://huggingface.co/konnik/DiffusionPen">Hugging Face</a>
-      
+    |
+    <a href="https://github.com/koninik/DiffusionPen">Original repo</a>
   </b>
-</p> 
+</p>
 
+## ✨ What's new in this fork
 
+**Faster sampling with DPM-Solver++**
+- New `--scheduler dpm` option uses `DPMSolverMultistepScheduler` (DPM-Solver++, 2nd order). It gives results on par with DDIM in **20 steps instead of 50**.
+- New `--sampling_steps` flag sets the number of denoising steps. The default is 50 for DDIM and 20 for DPM.
+- No retraining needed. Both schedulers use the same Stable Diffusion v1.5 noise schedule, so the original weights work as-is.
 
-## 📢 Introduction
-- We introduce DiffusionPen, a few-shot diffusion model developed for generating stylized handwritten text. By using just a few reference samples (as few as five), it learns a writer’s unique handwriting style and generates new text that imitates that style.
-- DiffusionPen effectively captures both seen and unseen handwriting styles with fewer examples. This is achieved through a style extraction module that combines metric learning and classification, allowing for greater flexibility in representing various writing styles.
-- We evaluated DiffusionPen on IAM and GNHK (only qualitative) handwriting datasets, demonstrating its ability to generate diverse and realistic handwritten text. The generated data closely matches the real handwriting distribution, leading to enhancement in Handwriting Text Recognition (HTR) systems when used for training. 
+<table>
+  <tr>
+    <td align="center"><img src="imgs/samples/paragraph_style_12_ddim50.png" width="420"><br>DDIM, 50 steps</td>
+    <td align="center"><img src="imgs/samples/paragraph_style_12_dpm20.png" width="420"><br>DPM-Solver++, 20 steps</td>
+  </tr>
+</table>
+
+**Command-line control over sampling.** Before, the text and style were hard-coded in `train.py`. Now you can set them with flags:
+- `--text`: the word(s) or paragraph to generate.
+- `--style`: which IAM writer style to copy (index 0–338).
+- `--seed`: makes results reproducible.
+- `--output_dir`: where outputs go. Single words are saved to `<output_dir>/single/`, paragraphs to `<output_dir>/paragraph/`. File names include the word, the style and the sampler, e.g. `hello_style_12_dpm20.png`.
+
+**Fixes and quality of life**
+- Runs on CPU when no GPU is found: `--device` defaults to `cpu` and checkpoints load with `map_location`.
+- Sampling no longer loads the full IAM training dataset, so it starts faster.
+- `wandb` is only needed when `--wandb_log True` is set.
+- Fixed a crash in paragraph mode (`punctuation` was undefined) and an invalid `clip_model` argument.
+- Single-word sampling now saves one file per word (the `save_single_images` helper was missing).
+
+## 📢 Introduction (from the original authors)
+- DiffusionPen is a few-shot diffusion model for generating stylized handwritten text. From just a few reference samples (as few as five), it learns a writer's handwriting style and generates new text that imitates it.
+- It captures both seen and unseen handwriting styles from few examples. This is done with a style extraction module that combines metric learning and classification.
+- It was evaluated on the IAM and GNHK (qualitative only) handwriting datasets. The generated data closely matches the real handwriting distribution and improves Handwriting Text Recognition (HTR) systems when used for training.
 
 <p align="center">
   <img src="imgs/diffusionpen.png" alt="Overview of the proposed DiffusionPen" style="width: 60%;">
@@ -28,37 +57,64 @@
   Overview of the proposed DiffusionPen
 </p>
 
-## 🚀 Download Dataset & Models from Hugging Face 🤗
-You can download the pre-processed dataset and model weights from HF here: <a href="https://huggingface.co/konnik/DiffusionPen">https://huggingface.co/konnik/DiffusionPen</a> 
+## 🚀 Setup
 
-- IAM pre-processed dataset in .pt for direct loading in <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/saved_iam_data">saved_iam_data</a>
-- Style weights for the style encoder (also DiffusionPen-class and DiffusionPen-triplet) in <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/style_models">style_models</a>
-- DiffusionPen weights for IAM in <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/diffusionpen_iam_model_path/models">diffusionpen_iam_model_path/models</a>
+Datasets and model weights are **not included in this repository**. Download them from the original authors' Hugging Face page: <a href="https://huggingface.co/konnik/DiffusionPen">https://huggingface.co/konnik/DiffusionPen</a>
 
-Place the folders 📁`saved_iam_data`, 📁`style_models`, and 📁`diffusionpen_iam_model_path` in the main code directory.
+- IAM pre-processed dataset in .pt, for direct loading: <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/saved_iam_data">saved_iam_data</a>
+- Style encoder weights (including DiffusionPen-class and DiffusionPen-triplet): <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/style_models">style_models</a>
+- DiffusionPen weights for IAM: <a href="https://huggingface.co/konnik/DiffusionPen/tree/main/diffusionpen_iam_model_path/models">diffusionpen_iam_model_path/models</a>
+- VAE and noise scheduler config: <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5">stable-diffusion-v1-5</a>
+- IAM word images (`iam_data/words/`): sampling uses them as style references. Get them from the [IAM Handwriting Database](https://fki.tic.heia-fr.ch/databases/iam-handwriting-database) (registration required).
 
-For VAE encoder-decoder and DDIM we use <a href="https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5">stable-diffusion-v1-5</a>.
+Place them in the main code directory like this:
 
-
-## 🧪 Sampling using DiffusionPen
-
-For single image sampling run
 ```
-python train.py --save_path ./diffusionpen_iam_model_path --style_path ./style_models/iam_style_diffusionpen.pth --train_mode sampling --sampling_mode single_sampling
-```
-
-For paragraph sampling run
-```
-python train.py --save_path ./diffusionpen_iam_model_path --style_path ./style_models/iam_style_diffusionpen.pth --train_mode sampling --sampling_mode paragraph
+DiffusionPen/
+├── diffusionpen_iam_model_path/models/{ckpt.pt, ema_ckpt.pt}
+├── style_models/iam_style_diffusionpen.pth
+├── stable-diffusion-v1-5/{vae/, scheduler/}
+├── iam_data/words/...
+└── saved_iam_data/        # only needed for training
 ```
 
-We also provide the IAM training and validation set images generated using **DiffusionPen** in the following link:  
+## 🧪 Sampling
+
+**Single words.** Each space-separated word becomes its own image:
+```
+python train.py --train_mode sampling --sampling_mode single_sampling --text "hello world" --style 12 --scheduler dpm
+```
+
+**Paragraph.** The whole text is written in one style:
+```
+python train.py --train_mode sampling --sampling_mode paragraph --text "In this work , we focus on style variation ." --style 12 --scheduler dpm
+```
+Put spaces around punctuation (`word , word .`). The paragraph is split on spaces, and stand-alone punctuation is laid out separately.
+
+**Full command with every sampling flag:**
+```
+python train.py --train_mode sampling --sampling_mode paragraph --text "your text here ." --style 12 --scheduler dpm --sampling_steps 20 --seed 42 --output_dir ./image_samples --save_path ./diffusionpen_iam_model_path --style_path ./style_models/iam_style_diffusionpen.pth --stable_dif_path ./stable-diffusion-v1-5 --device cuda:0
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--sampling_mode` | `single_sampling` | `single_sampling` (one image per word) or `paragraph` |
+| `--text` | built-in demo text | Words or paragraph to generate |
+| `--style` | random (single), `12` (paragraph) | IAM writer style index, 0–338. Mapped to writer IDs in `writers_dict_train.json` |
+| `--scheduler` | `ddim` | `ddim` or `dpm` (DPM-Solver++) |
+| `--sampling_steps` | 50 (ddim) / 20 (dpm) | Number of denoising steps |
+| `--seed` | none | Random seed for reproducible outputs |
+| `--output_dir` | `./image_samples` | Output folder |
+| `--device` | `cuda:0` if available, else `cpu` | Device to run on |
+
+> **Note:** Do not pass the boolean flags (`--latent`, `--img_feat`, `--color`, ...) on the command line. They use argparse `type=bool`, so even `False` is read as `True`. Their defaults are already correct for sampling.
+
+The original authors also provide the IAM training and validation set images generated with **DiffusionPen**:
 [Download IAM Dataset Generated with DiffusionPen](https://drive.google.com/file/d/1IcQLZ8yIqdLgYyZUsFOl3v8qYN3h2RJL/view?usp=share_link)
-(test set will be soon uploaded!!!)
 
 ## 🏋️‍♂️ Train with Your Own Data
 
-If you'd like to train DiffusionPen using your own data, simply adjust the data loader to fit your dataset and follow these 2 steps:
+To train DiffusionPen on your own data, adjust the data loader to fit your dataset and follow these 2 steps:
 
 1. Train the Style Encoder:
 ```
@@ -71,15 +127,24 @@ python train.py --epochs 1000 --model_name diffusionpen --save_path /new/path/to
 
 ## 📝 Evaluation
 
-We compare **DiffusionPen** with several state-of-the-art generative models, including [GANwriting](https://github.com/omni-us/research-GANwriting), [SmartPatch](https://github.com/MattAlexMiracle/SmartPatch), [VATr](https://github.com/aimagelab/VATr), and [WordStylist](https://github.com/koninik/WordStylist). 
+The original paper compares **DiffusionPen** with several state-of-the-art generative models, including [GANwriting](https://github.com/omni-us/research-GANwriting), [SmartPatch](https://github.com/MattAlexMiracle/SmartPatch), [VATr](https://github.com/aimagelab/VATr), and [WordStylist](https://github.com/koninik/WordStylist).
 The Handwriting Text Recognition (HTR) system used for evaluation is based on [Best practices for HTR](https://github.com/georgeretsi/HTR-best-practices).
 
+## 🗺️ Roadmap
+
+- [x] DPM-Solver++ sampler (20 steps)
+- [x] CLI control of text, style, seed and output folder
+- [ ] Few-shot style from your own handwriting photos (`--style_images`)
+- [ ] Consistent style references across a paragraph, plus batched word generation
+- [ ] Baseline-aligned, more natural paragraph layout
+- [ ] OCR-based selection of the most legible sample
+- [ ] Gradio web demo
 
 ---
 
 ## 📄 Citation
 
-If you find our work useful for your research, please cite:
+This fork is based entirely on the work of the original authors. If you find it useful, please cite their paper:
 
 ```bibtex
 @article{nikolaidou2024diffusionpen,
@@ -88,4 +153,8 @@ If you find our work useful for your research, please cite:
   journal={arXiv preprint arXiv:2409.06065},
   year={2024}
 }
+```
 
+## 📜 License
+
+MIT, same as the original repository. Copyright (c) 2024 Konstantina Nikolaidou. See [LICENSE](LICENSE).
