@@ -128,6 +128,47 @@ python train.py --epochs 1000 --model_name diffusionpen --save_path /new/path/to
 
 ## 📝 Evaluation
 
+### Evaluation script (this fork)
+
+`eval.py` measures two things:
+- **Legibility:** CER (character error rate) and word accuracy, read by [TrOCR](https://huggingface.co/microsoft/trocr-base-handwritten).
+- **Style fidelity:** [HWD (Handwriting Distance)](https://github.com/aimagelab/HWD) (Pippi et al., BMVC 2023), computed between generated words and the writer's real handwriting.
+
+**How it works:** the script picks IAM writers. By default these are *unseen test writers*, so this is a real few-shot test. For each writer it:
+1. Takes 5 of their words as style references.
+2. Generates other words that same writer actually wrote.
+3. Scores the generated words against the writer's real images of those same words.
+
+**Setup** (one time):
+```
+pip install git+https://github.com/aimagelab/HWD.git gudhi matplotlib
+```
+
+**Compare samplers.** Runs in the same `--out_dir` reuse the same writers, references and initial noise, so they are directly comparable:
+```
+python eval.py --scheduler ddim --sampling_steps 50
+python eval.py --scheduler dpm --sampling_steps 20
+```
+After each run, a comparison table of all runs in that folder is printed:
+
+| Column | Meaning | Better |
+|---|---|---|
+| HWD (style) | Distance between generated and real handwriting features, averaged per writer | lower |
+| CER | Raw TrOCR character error rate | lower |
+| CER norm | CER ignoring case, punctuation and spaces. TrOCR is a line model and often appends " ." to single words, so this is the fairer number. | lower |
+| word acc | Share of words read exactly right, after the same normalization | higher |
+| sec/word | Generation time per word | lower |
+| `real (ref.)` row | HWD between two separate sets of each writer's real words (the score real handwriting from the same writer gets, a reference level), and TrOCR's CER on real words (the OCR ceiling) | — |
+
+**Useful flags:**
+- `--split train` evaluates writers seen during training.
+- `--num_writers` / `--words_per_writer` set the sample size (default 10 × 20).
+- `--skip_generation` re-scores existing images without generating again.
+- `--fid` adds FID. It is only meaningful with many images.
+- Generated images, OCR predictions and `results_<tag>.json` are saved in `--out_dir`, by default `./eval_runs/iam_test`.
+
+### Original paper
+
 The original paper compares **DiffusionPen** with several state-of-the-art generative models, including [GANwriting](https://github.com/omni-us/research-GANwriting), [SmartPatch](https://github.com/MattAlexMiracle/SmartPatch), [VATr](https://github.com/aimagelab/VATr), and [WordStylist](https://github.com/koninik/WordStylist).
 The Handwriting Text Recognition (HTR) system used for evaluation is based on [Best practices for HTR](https://github.com/georgeretsi/HTR-best-practices).
 
@@ -135,6 +176,7 @@ The Handwriting Text Recognition (HTR) system used for evaluation is based on [B
 
 - [x] DPM-Solver++ sampler (20 steps)
 - [x] CLI control of text, style, seed and output folder
+- [x] Evaluation script: HWD (style) + TrOCR CER (legibility)
 - [ ] Few-shot style from your own handwriting photos (`--style_images`)
 - [ ] Consistent style references across a paragraph, plus batched word generation
 - [ ] Baseline-aligned, more natural paragraph layout

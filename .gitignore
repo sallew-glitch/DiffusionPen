@@ -14,6 +14,7 @@ stable-diffusion-v1-5/
 
 # Generated outputs
 image_samples/
+eval_runs/
 /paragraph_style_*.png
 
 # Python
